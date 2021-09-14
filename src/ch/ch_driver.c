@@ -26,6 +26,7 @@
 #include "ch_monitor.h"
 #include "ch_process.h"
 #include "domain_cgroup.h"
+#include "ch_migration.h"
 #include "datatypes.h"
 #include "driver.h"
 #include "viraccessapicheck.h"
@@ -254,7 +255,7 @@ chDomainCreateWithFlags(virDomainPtr dom, unsigned int flags)
     if (virCHDomainObjBeginJob(vm, VIR_JOB_MODIFY) < 0)
         goto cleanup;
 
-    ret = virCHProcessStart(driver, vm, VIR_DOMAIN_RUNNING_BOOTED);
+    ret = virCHProcessStart(driver, vm, VIR_DOMAIN_RUNNING_BOOTED, 0);
 
     virCHDomainObjEndJob(vm);
 
@@ -1686,6 +1687,406 @@ chDomainSetNumaParameters(virDomainPtr dom,
     return ret;
 }
 
+static int
+virCHDomainSetVcpusMax(virCHDriverPtr driver,
+                       virDomainDefPtr def,
+                       virDomainDefPtr persistentDef,
+                       unsigned int nvcpus)
+{
+    g_autoptr(virCHDriverConfig) cfg = virCHDriverGetConfig(driver);
+    unsigned int topologycpus;
+
+    if (def) {
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED, "%s",
+                       _("maximum vcpu count of a live domain can't be modified"));
+        return -1;
+    }
+
+    if (virDomainNumaGetCPUCountTotal(persistentDef->numa) > nvcpus) {
+        virReportError(VIR_ERR_INVALID_ARG, "%s",
+                       _("Number of CPUs in <numa> exceeds the desired "
+                         "maximum vcpu count"));
+        return -1;
+    }
+
+    if (virDomainDefGetVcpusTopology(persistentDef, &topologycpus) == 0 &&
+        nvcpus != topologycpus) {
+        /* allow setting a valid vcpu count for the topology so an invalid
+         * setting may be corrected via this API */
+        virReportError(VIR_ERR_INVALID_ARG, "%s",
+                       _("CPU topology doesn't match the desired vcpu count"));
+        return -1;
+    }
+
+    /* ordering information may become invalid, thus clear it */
+    virDomainDefVcpuOrderClear(persistentDef);
+
+    if (virDomainDefSetVcpusMax(persistentDef, nvcpus, driver->xmlopt) < 0)
+        return -1;
+
+    if (virDomainDefSave(persistentDef, driver->xmlopt, cfg->stateDir) < 0)
+        return -1;
+
+    return 0;
+}
+
+static int
+chDomainSetVcpusFlags(virDomainPtr dom,
+                      unsigned int nvcpus,
+                      unsigned int flags)
+{
+    virCHDriverPtr driver = dom->conn->privateData;
+    virDomainObjPtr vm = NULL;
+    virDomainDefPtr def;
+    virDomainDefPtr persistentDef;
+    int ret = -1;
+
+    virCheckFlags(VIR_DOMAIN_AFFECT_LIVE |
+                  VIR_DOMAIN_AFFECT_CONFIG |
+                  VIR_DOMAIN_VCPU_MAXIMUM |
+                  VIR_DOMAIN_VCPU_GUEST |
+                  VIR_DOMAIN_VCPU_HOTPLUGGABLE, -1);
+
+    if (!(vm = virCHDomainObjFromDomain(dom)))
+        goto cleanup;
+
+    if (virDomainSetVcpusFlagsEnsureACL(dom->conn, vm->def, flags) < 0)
+        goto cleanup;
+
+
+    if (virCHDomainObjBeginJob(vm, CH_JOB_MODIFY) < 0)
+        goto cleanup;
+
+    if (virDomainObjGetDefs(vm, flags, &def, &persistentDef) < 0)
+        goto endjob;
+
+    if (flags & VIR_DOMAIN_VCPU_MAXIMUM)
+        ret = virCHDomainSetVcpusMax(driver, def, persistentDef, nvcpus);
+    else
+        ret = virCHDomainSetVcpusInternal(vm, def, nvcpus);
+
+ endjob:
+    virCHDomainObjEndJob(vm);
+
+ cleanup:
+    virDomainObjEndAPI(&vm);
+    return ret;
+}
+
+static int
+chDomainSetVcpus(virDomainPtr dom, unsigned int nvcpus)
+{
+    return chDomainSetVcpusFlags(dom, nvcpus, VIR_DOMAIN_AFFECT_LIVE);
+}
+
+static int chDomainSetAutostart(virDomainPtr dom,
+                                  int autostart)
+{
+    virCHDriverPtr driver = dom->conn->privateData;
+    virDomainObjPtr vm;
+    g_autofree char *configFile = NULL;
+    g_autofree char *autostartLink = NULL;
+    int ret = -1;
+    g_autoptr(virCHDriverConfig) cfg = NULL;
+
+    if (!(vm = virCHDomainObjFromDomain(dom)))
+        return -1;
+
+    cfg = virCHDriverGetConfig(driver);
+
+    if (virDomainSetAutostartEnsureACL(dom->conn, vm->def) < 0)
+        goto cleanup;
+
+    if (!vm->persistent) {
+        virReportError(VIR_ERR_OPERATION_INVALID,
+                       "%s", _("cannot set autostart for transient domain"));
+        goto cleanup;
+    }
+
+    autostart = (autostart != 0);
+
+    if (vm->autostart != autostart) {
+        if (virCHDomainObjBeginJob(vm, CH_JOB_MODIFY) < 0)
+            goto cleanup;
+
+        if (!(configFile = virDomainConfigFile(cfg->stateDir, vm->def->name)))
+            goto endjob;
+
+        if (!(autostartLink = virDomainConfigFile(cfg->autostartDir,
+                                                  vm->def->name)))
+            goto endjob;
+
+        if (autostart) {
+            if (virFileMakePath(cfg->autostartDir) < 0) {
+                virReportSystemError(errno,
+                                     _("cannot create autostart directory %s"),
+                                     cfg->autostartDir);
+                goto endjob;
+            }
+
+            if (symlink(configFile, autostartLink) < 0) {
+                virReportSystemError(errno,
+                                     _("Failed to create symlink '%s to '%s'"),
+                                     autostartLink, configFile);
+                goto endjob;
+            }
+        } else {
+            if (unlink(autostartLink) < 0 &&
+                errno != ENOENT &&
+                errno != ENOTDIR) {
+                virReportSystemError(errno,
+                                     _("Failed to delete symlink '%s'"),
+                                     autostartLink);
+                goto endjob;
+            }
+        }
+
+        vm->autostart = autostart;
+
+ endjob:
+        virCHDomainObjEndJob(vm);
+    }
+    ret = 0;
+
+ cleanup:
+    virDomainObjEndAPI(&vm);
+    return ret;
+}
+
+static int chDomainGetAutostart(virDomainPtr dom,
+                                  int *autostart)
+{
+    virDomainObjPtr vm;
+    int ret = -1;
+
+    if (!(vm = virCHDomainObjFromDomain(dom)))
+        goto cleanup;
+
+    if (virDomainGetAutostartEnsureACL(dom->conn, vm->def) < 0)
+        goto cleanup;
+
+    *autostart = vm->autostart;
+    ret = 0;
+
+ cleanup:
+    virDomainObjEndAPI(&vm);
+    return ret;
+};
+
+static char *
+chDomainMigrateBegin3Params(virDomainPtr domain,
+                            virTypedParameterPtr params,
+                            int nparams,
+                            char **cookieout,
+                            int *cookieoutlen,
+                            unsigned int flags)
+{
+    virDomainObjPtr vm;
+    const char *xmlin = NULL;
+    const char *dname = NULL;
+    char *xmlout = NULL;
+
+    virCheckFlags(CH_MIGRATION_FLAGS, NULL);
+    if (virTypedParamsValidate(params, nparams, CH_MIGRATION_PARAMETERS) < 0)
+        goto cleanup;
+
+    if (virTypedParamsGetString(params, nparams, VIR_MIGRATE_PARAM_DEST_XML,
+                                &xmlin) < 0 ||
+        virTypedParamsGetString(params, nparams, VIR_MIGRATE_PARAM_DEST_NAME,
+                                &dname) < 0)
+        goto cleanup;
+
+    if (!(vm = chDomObjFromDomain(domain)))
+        goto cleanup;
+
+    if (virDomainMigrateBegin3ParamsEnsureACL(domain->conn, vm->def) < 0)
+        goto cleanup;
+
+    xmlout = chDomainMigrationSrcBegin(domain->conn, vm, xmlin,
+                                       cookieout, cookieoutlen);
+cleanup:
+    virDomainObjEndAPI(&vm);
+    return xmlout;
+}
+
+static int
+chDomainMigratePrepare3Params(virConnectPtr dconn,
+                              virTypedParameterPtr params,
+                              int nparams,
+                              const char *cookiein,
+                              int cookieinlen,
+                              char **cookieout,
+                              int *cookieoutlen,
+                              char **uri_out,
+                              unsigned int flags)
+{
+    virCHDriverPtr driver = dconn->privateData;
+    g_autoptr(virDomainDef) def = NULL;
+    g_autofree char *origname = NULL;
+    const char *dom_xml = NULL;
+    const char *dname = NULL;
+    const char *uri_in = NULL;
+
+    virCheckFlags(CH_MIGRATION_FLAGS, -1);
+
+    if (virTypedParamsValidate(params, nparams, CH_MIGRATION_PARAMETERS) < 0)
+        return -1;
+
+    if (virTypedParamsGetString(params, nparams, VIR_MIGRATE_PARAM_DEST_XML,
+                                &dom_xml) < 0 ||
+        virTypedParamsGetString(params, nparams, VIR_MIGRATE_PARAM_DEST_NAME,
+                                &dname) < 0 ||
+        virTypedParamsGetString(params, nparams, VIR_MIGRATE_PARAM_URI,
+                                &uri_in) < 0)
+        return -1;
+
+    if (!(def = chDomainMigrationAnyPrepareDef(driver, dom_xml, dname, &origname)))
+        return -1;
+
+    if (virDomainMigratePrepare3ParamsEnsureACL(dconn, def) < 0)
+        return -1;
+
+    return chDomainMigrationDstPrepare(dconn, &def,
+            cookiein, cookieinlen, cookieout, cookieoutlen,
+            uri_in, uri_out,
+            origname);
+}
+
+static int
+chDomainMigratePerform3Params(virDomainPtr dom,
+                              const char *dconnuri,
+                              virTypedParameterPtr params,
+                              int nparams,
+                              const char *cookiein,
+                              int cookieinlen,
+                              char **cookieout,
+                              int *cookieoutlen,
+                              unsigned int flags)
+{
+    virCHDriverPtr driver = dom->conn->privateData;
+    virDomainObjPtr vm = NULL;
+    int ret = -1;
+    const char *dom_xml = NULL;
+    const char *dname = NULL;
+    const char *uri = NULL;
+    const char *persist_xml = NULL;
+
+    virCheckFlags(CH_MIGRATION_FLAGS, -1);
+    if (virTypedParamsValidate(params, nparams, CH_MIGRATION_PARAMETERS) < 0)
+        goto cleanup;
+
+    if (virTypedParamsGetString(params, nparams, VIR_MIGRATE_PARAM_DEST_XML,
+                                &dom_xml) < 0 ||
+        virTypedParamsGetString(params, nparams, VIR_MIGRATE_PARAM_DEST_NAME,
+                                &dname) < 0 ||
+        virTypedParamsGetString(params, nparams, VIR_MIGRATE_PARAM_URI,
+                                &uri) < 0 ||
+        virTypedParamsGetString(params, nparams, VIR_MIGRATE_PARAM_PERSIST_XML,
+                                &persist_xml) < 0)
+        goto cleanup;
+
+    if (!(vm = chDomObjFromDomain(dom)))
+        goto cleanup;
+
+    if (virDomainMigratePerform3ParamsEnsureACL(dom->conn, vm->def) < 0)
+        goto cleanup;
+
+    ret = chDomainMigrationSrcPerform(driver, vm, dom_xml, dconnuri, uri,
+                                      dname, 0);
+
+    (void) cookiein;
+    (void) cookieinlen;
+    (void) cookieout;
+    (void) cookieoutlen;
+
+ cleanup:
+    virDomainObjEndAPI(&vm);
+    return ret;
+
+}
+
+static virDomainPtr
+chDomainMigrateFinish3Params(virConnectPtr dconn,
+                             virTypedParameterPtr params,
+                             int nparams,
+                             const char *cookiein,
+                             int cookieinlen,
+                             char **cookieout,
+                             int *cookieoutlen,
+                             unsigned int flags,
+                             int cancelled)
+{
+    (void) dconn;
+    (void) params;
+    (void) nparams;
+    (void) cookiein;
+    (void) cookieinlen;
+    (void) cookieout;
+    (void) cookieoutlen;
+    (void) flags;
+    (void) cancelled;
+    return NULL;
+}
+
+static int
+chDomainMigrateConfirm3Params(virDomainPtr domain,
+                              virTypedParameterPtr params,
+                              int nparams,
+                              const char *cookiein,
+                              int cookieinlen,
+                              unsigned int flags,
+                              int cancelled)
+{
+    virDomainObjPtr vm = NULL;
+    virCHDriverPtr driver = domain->conn->privateData;
+    int ret = -1;
+
+    (void) cookiein;
+    (void) cookieinlen;
+
+    virCheckFlags(CH_MIGRATION_FLAGS, -1);
+    if (virTypedParamsValidate(params, nparams, CH_MIGRATION_PARAMETERS) < 0)
+        return -1;
+
+    if (!(vm = chDomObjFromDomain(domain)))
+        return -1;
+
+    if (virDomainMigrateConfirm3ParamsEnsureACL(domain->conn, vm->def) < 0)
+        goto cleanup;
+
+    ret = chDomainMigrationSrcConfirm(driver, vm, flags, cancelled);
+
+ cleanup:
+    virDomainObjEndAPI(&vm);
+    return ret;
+}
+
+static int
+chDomainGetJobInfo(virDomainPtr dom,
+                   virDomainJobInfoPtr info)
+{
+    virCHDriverPtr driver = dom->conn->privateData;
+    virDomainObjPtr vm;
+    int ret = -1;
+
+    memset(info, 0, sizeof(*info));
+    if (!(vm = virCHDomainObjFromDomain(dom)))
+        goto cleanup;
+
+    if (virDomainGetJobInfoEnsureACL(dom->conn, vm->def) < 0)
+        goto cleanup;
+
+    /* XXX leave all fields zero for now */
+
+    (void) driver;
+
+    ret = 0;
+
+ cleanup:
+    virDomainObjEndAPI(&vm);
+    return ret;
+}
+
 /* Function Tables */
 static virHypervisorDriver chHypervisorDriver = {
     .name = "CH",
@@ -1734,6 +2135,12 @@ static virHypervisorDriver chHypervisorDriver = {
     .nodeGetCPUMap = chNodeGetCPUMap,                       /* 8.0.0 */
     .domainSetNumaParameters = chDomainSetNumaParameters,   /* 8.1.0 */
     .domainGetNumaParameters = chDomainGetNumaParameters,   /* 8.1.0 */
+    .domainMigrateBegin3Params = chDomainMigrateBegin3Params,  /* x.y.z */
+    .domainMigratePrepare3Params = chDomainMigratePrepare3Params, /* x.y.z */
+    .domainMigratePerform3Params = chDomainMigratePerform3Params, /* x.y.z */
+    .domainMigrateFinish3Params = chDomainMigrateFinish3Params, /* x.y.z */
+    .domainMigrateConfirm3Params = chDomainMigrateConfirm3Params, /* x.y.z */
+    .domainGetJobInfo = chDomainGetJobInfo, /* x.y.z */
 };
 
 static virConnectDriver chConnectDriver = {

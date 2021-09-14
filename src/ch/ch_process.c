@@ -448,11 +448,188 @@ virCHProcessSetupVcpus(virDomainObj *vm)
     return 0;
 }
 
+int virCHProcessSetupThreads(virDomainObjPtr vm)
+{
+    virCHDriverPtr driver = CH_DOMAIN_PRIVATE(vm)->driver;
+    g_autoptr(virCHDriverConfig) cfg = virCHDriverGetConfig(driver);
+    virCHDomainObjPrivatePtr priv = vm->privateData;
+    int ret;
+
+    ret = virCHMonitorRefreshThreadInfo(priv->monitor);
+    if (ret <= 0)
+        return ret;
+
+    VIR_DEBUG("Setting emulator tuning/settings");
+    ret = virCHProcessSetupEmulatorThreads(vm);
+
+    if (!ret) {
+        VIR_DEBUG("Setting iothread tuning/settings");
+        ret = virCHProcessSetupIOThreads(vm);
+    }
+
+    if (!ret) {
+        VIR_DEBUG("Setting vCPU tuning/settings");
+        ret = virCHProcessSetupVcpus(vm);
+    }
+
+    if (!ret) {
+        ret = virDomainObjSave(vm, driver->xmlopt, cfg->stateDir);
+    }
+
+    return ret;
+}
+
+/**
+ * chProcessNetworkPrepareDevices
+ */
+static int
+chProcessNetworkPrepareDevices(virCHDriverPtr driver, virDomainObjPtr vm)
+{
+    virDomainDefPtr def = vm->def;
+    size_t i;
+    virCHDomainObjPrivatePtr priv = vm->privateData;
+    g_autoptr(virConnect) conn = NULL;
+    int *tapfd = NULL;
+    size_t tapfdSize = 0;
+
+    for (i = 0; i < def->nnets; i++) {
+        virDomainNetDefPtr net = def->nets[i];
+        virDomainNetType actualType;
+
+        /* If appropriate, grab a physical device from the configured
+         * network's pool of devices, or resolve bridge device name
+         * to the one defined in the network definition.
+         */
+        if (net->type == VIR_DOMAIN_NET_TYPE_NETWORK) {
+            if (!conn && !(conn = virGetConnectNetwork())) {
+                return -1;
+            }
+            if (virDomainNetAllocateActualDevice(conn, def, net) < 0) {
+                return -1;
+            }
+        }
+
+        actualType = virDomainNetGetActualType(net);
+        if (actualType == VIR_DOMAIN_NET_TYPE_HOSTDEV &&
+            net->type == VIR_DOMAIN_NET_TYPE_NETWORK) {
+            /* Each type='hostdev' network device must also have a
+             * corresponding entry in the hostdevs array. For netdevs
+             * that are hardcoded as type='hostdev', this is already
+             * done by the parser, but for those allocated from a
+             * network / determined at runtime, we need to do it
+             * separately.
+             */
+            virDomainHostdevDefPtr hostdev = virDomainNetGetActualHostdev(net);
+            virDomainHostdevSubsysPCIPtr pcisrc = &hostdev->source.subsys.u.pci;
+
+            if (virDomainHostdevFind(def, hostdev, NULL) >= 0) {
+                virReportError(VIR_ERR_INTERNAL_ERROR,
+                               _("PCI device %04x:%02x:%02x.%x "
+                                 "allocated from network %s is already "
+                                 "in use by domain %s"),
+                               pcisrc->addr.domain, pcisrc->addr.bus,
+                               pcisrc->addr.slot, pcisrc->addr.function,
+                               net->data.network.name, def->name);
+                return -1;
+            }
+            if (virDomainHostdevInsert(def, hostdev) < 0)
+                return -1;
+        } else if (actualType == VIR_DOMAIN_NET_TYPE_USER ) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+              _("VIR_DOMAIN_NET_TYPE_USER is not a supported Network type"));
+        } else if (actualType == VIR_DOMAIN_NET_TYPE_NETWORK || actualType == VIR_DOMAIN_NET_TYPE_BRIDGE ) {
+            tapfdSize = net->driver.virtio.queues;
+            if (!tapfdSize)
+                tapfdSize = 1;
+            VIR_ERROR("tapfd: %lu", tapfdSize);
+
+            tapfd = g_new(int, tapfdSize);
+
+            memset(tapfd, -1, tapfdSize * sizeof(tapfd[0]));
+
+            if (chInterfaceBridgeConnect(def, driver,  net,
+                                       tapfd, &tapfdSize) < 0)
+                goto cleanup;
+
+            // Store tap information in Private Data
+            // This info will be used while generating Network Json
+            priv->tapfd = g_steal_pointer(&tapfd);
+            priv->tapfdSize = tapfdSize;
+        } else if (actualType == VIR_DOMAIN_NET_TYPE_ETHERNET) {
+            tapfdSize = net->driver.virtio.queues;
+            if (!tapfdSize)
+                tapfdSize = 1;
+
+            tapfd = g_new(int, tapfdSize);
+
+            memset(tapfd, -1, tapfdSize * sizeof(tapfd[0]));
+
+            if (chInterfaceEthernetConnect(def, driver, net,
+                                           tapfd, tapfdSize) < 0)
+                goto cleanup;
+
+            // Store tap information in Private Data
+            // This info will be used while generating Network Json
+            priv->tapfd = g_steal_pointer(&tapfd);
+            priv->tapfdSize = tapfdSize;
+        }
+    }
+
+    return 0;
+
+ cleanup:
+    g_free(tapfd);
+    return -1;
+}
+
+int virCHProcessFinishStartup(virCHDriverPtr driver,
+                              virDomainObjPtr vm,
+                              bool startCPUs,
+                              virDomainRunningReason reason,
+                              virDomainPausedReason pausedReason)
+{
+    virCHDomainObjPrivatePtr priv = vm->privateData;
+    g_autoptr(virCHDriverConfig) cfg = virCHDriverGetConfig(driver);
+    int ret = -1;
+
+    if (startCPUs) {
+        VIR_DEBUG("Starting domain CPUs");
+        if (virCHMonitorBootVM(priv->monitor) < 0) {
+            virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                           _("failed to boot guest VM"));
+            goto error;
+        }
+
+        virCHMonitorRefreshThreadInfo(priv->monitor);
+
+        virCHProcessUpdateInfo(vm);
+
+        if (virCHProcessSetupThreads(vm) < 0)
+            goto error;
+
+        VIR_DEBUG("Setting global CPU cgroup (if required)");
+        if (chSetupGlobalCpuCgroup(vm) < 0)
+            goto error;
+        virDomainObjSetState(vm, VIR_DOMAIN_RUNNING, reason);
+    } else {
+        virDomainObjSetState(vm, VIR_DOMAIN_PAUSED, pausedReason);
+    }
+
+    if (virDomainObjSave(vm, driver->xmlopt, cfg->stateDir) < 0)
+        goto error;
+
+    ret = 0;
+
+error:
+    return ret;
+}
+
 /**
  * virCHProcessStart:
  * @driver: pointer to driver structure
  * @vm: pointer to virtual machine structure
  * @reason: reason for switching vm to running state
+ * @flags: VIR_CH_PROCESS_START_* flags
  *
  * Starts Cloud-Hypervisor listen on a local socket
  *
@@ -461,7 +638,8 @@ virCHProcessSetupVcpus(virDomainObj *vm)
 int
 virCHProcessStart(virCHDriver *driver,
                   virDomainObj *vm,
-                  virDomainRunningReason reason)
+                  virDomainRunningReason reason,
+                  unsigned int flags)
 {
     int ret = -1;
     virCHDomainObjPrivate *priv = vm->privateData;
@@ -534,6 +712,12 @@ virCHProcessStart(virCHDriver *driver,
 
     virCHProcessUpdateInfo(vm);
     virDomainObjSetState(vm, VIR_DOMAIN_RUNNING, reason);
+
+    if (virCHProcessFinishStartup(driver, vm,
+                                  !(flags & VIR_CH_PROCESS_START_PAUSED),
+                                  reason,
+                                  VIR_DOMAIN_PAUSED_MIGRATION) < 0)
+        goto cleanup;
 
     return 0;
 
