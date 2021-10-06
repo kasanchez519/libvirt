@@ -27,6 +27,7 @@
 #include "virerror.h"
 #include "viralloc.h"
 #include "ch_migration.h"
+#include "ch_process.h"
 
 #define VIR_FROM_THIS VIR_FROM_CH
 
@@ -226,7 +227,6 @@ chDomainMigrationDstPrepare(virConnectPtr dconn,
     if (virCHDomainObjBeginJob(vm, CH_JOB_MODIFY) < 0)
         goto cleanup;
 
-    (void) driver;
     (void) def;
     (void) uri_in;
     (void) uri_out;
@@ -234,7 +234,14 @@ chDomainMigrationDstPrepare(virConnectPtr dconn,
     (void) cookieoutlen;
     (void) origname;
 
+    if (virCHProcessStart(driver, vm, 0, VIR_CH_PROCESS_START_PAUSED) < 0)
+        goto cleanup;
+
     virCHDomainObjEndJob(vm);
+
+    chMigrationCookieFree(mig);
+
+    return 0;
 
 cleanup:
     /* Remove virDomainObj from domain list */
