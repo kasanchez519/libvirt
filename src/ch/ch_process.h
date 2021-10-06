@@ -22,9 +22,14 @@
 
 #include "internal.h"
 
+typedef enum {
+    VIR_CH_PROCESS_START_PAUSED = 1 << 0,
+} chProcessStartFlags;
+
 int virCHProcessStart(virCHDriverPtr  driver,
                       virDomainObjPtr vm,
-                      virDomainRunningReason reason);
+                      virDomainRunningReason reason,
+                      unsigned int flags);
 int virCHProcessStop(virCHDriverPtr driver,
                      virDomainObjPtr vm,
                      virDomainShutoffReason reason);

@@ -681,6 +681,7 @@ error:
  * @driver: pointer to driver structure
  * @vm: pointer to virtual machine structure
  * @reason: reason for switching vm to running state
+ * @flags: VIR_CH_PROCESS_START_* flags
  *
  * Starts Cloud-Hypervisor listen on a local socket
  *
@@ -688,7 +689,8 @@ error:
  */
 int virCHProcessStart(virCHDriverPtr driver,
                       virDomainObjPtr vm,
-                      virDomainRunningReason reason)
+                      virDomainRunningReason reason,
+                      unsigned int flags)
 {
     virCHDomainObjPrivatePtr priv = vm->privateData;
     g_autofree int *nicindexes = NULL;
@@ -738,7 +740,8 @@ int virCHProcessStart(virCHDriverPtr driver,
         goto cleanup;
 
     if (virCHProcessFinishStartup(driver, vm,
-                                  true, reason,
+                                  !(flags & VIR_CH_PROCESS_START_PAUSED),
+                                  reason,
                                   VIR_DOMAIN_PAUSED_MIGRATION) < 0)
         goto cleanup;
 
