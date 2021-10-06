@@ -213,34 +213,34 @@ chDomainMigrationDstPrepare(virConnectPtr dconn,
     chMigrationCookiePtr mig = NULL;
     virDomainObjPtr vm = NULL;
 
+    if (chMigrationEatCookie(cookiein, cookieinlen, &mig) < 0)
+        goto cleanup;
+
     if (!(vm = virDomainObjListAdd(driver->domains, *def,
                     driver->xmlopt,
                     VIR_DOMAIN_OBJ_LIST_ADD_LIVE |
                     VIR_DOMAIN_OBJ_LIST_ADD_CHECK_LIVE,
                     NULL)))
-        goto error;
+        goto cleanup;
 
     if (virCHDomainObjBeginJob(vm, CH_JOB_MODIFY) < 0)
-        goto error;
+        goto cleanup;
 
-    (void) chMigrationEatCookie;
     (void) driver;
-    (void) mig;
     (void) def;
     (void) uri_in;
     (void) uri_out;
-    (void) cookiein;
-    (void) cookieinlen;
     (void) cookieout;
     (void) cookieoutlen;
     (void) origname;
 
     virCHDomainObjEndJob(vm);
 
-error:
+cleanup:
     /* Remove virDomainObj from domain list */
     if (vm)
         virDomainObjListRemove(driver->domains, vm);
+    chMigrationCookieFree(mig);
 
     return -1;
 }
