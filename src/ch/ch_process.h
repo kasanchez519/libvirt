@@ -42,3 +42,9 @@ virCHProcessSetupEmulatorThread(virDomainObjPtr vm, pid_t tid);
 
 void
 chProcessReconnectAll(virCHDriverPtr driver);
+
+int virCHProcessFinishStartup(virCHDriverPtr driver,
+                              virDomainObjPtr vm,
+                              bool startCPUs,
+                              virDomainRunningReason reason,
+                              virDomainPausedReason pausedReason);

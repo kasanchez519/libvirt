@@ -634,6 +634,47 @@ chProcessNetworkPrepareDevices(virCHDriverPtr driver, virDomainObjPtr vm)
     return -1;
 }
 
+int virCHProcessFinishStartup(virCHDriverPtr driver,
+                              virDomainObjPtr vm,
+                              bool startCPUs,
+                              virDomainRunningReason reason,
+                              virDomainPausedReason pausedReason)
+{
+    virCHDomainObjPrivatePtr priv = vm->privateData;
+    g_autoptr(virCHDriverConfig) cfg = virCHDriverGetConfig(driver);
+    int ret = -1;
+
+    if (startCPUs) {
+        VIR_DEBUG("Starting domain CPUs");
+        if (virCHMonitorBootVM(priv->monitor) < 0) {
+            virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                           _("failed to boot guest VM"));
+            goto error;
+        }
+
+        virCHMonitorRefreshThreadInfo(priv->monitor);
+
+        virCHProcessUpdateInfo(vm);
+
+        if (virCHProcessSetupThreads(vm) < 0)
+            goto error;
+
+        VIR_DEBUG("Setting global CPU cgroup (if required)");
+        if (chSetupGlobalCpuCgroup(vm) < 0)
+            goto error;
+        virDomainObjSetState(vm, VIR_DOMAIN_RUNNING, reason);
+    } else {
+        virDomainObjSetState(vm, VIR_DOMAIN_PAUSED, pausedReason);
+    }
+
+    if (virDomainObjSave(vm, driver->xmlopt, cfg->stateDir) < 0)
+        goto error;
+
+    ret = 0;
+
+error:
+    return ret;
+}
 
 /**
  * virCHProcessStart:
@@ -650,7 +691,6 @@ int virCHProcessStart(virCHDriverPtr driver,
                       virDomainRunningReason reason)
 {
     virCHDomainObjPrivatePtr priv = vm->privateData;
-    g_autoptr(virCHDriverConfig) cfg = virCHDriverGetConfig(driver);
     g_autofree int *nicindexes = NULL;
     size_t nnicindexes = 0;
     int ret = -1;
@@ -697,26 +737,9 @@ int virCHProcessStart(virCHDriverPtr driver,
     if (virCHProcessInitCpuAffinity(vm) < 0)
         goto cleanup;
 
-    if (virCHMonitorBootVM(priv->monitor) < 0) {
-        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
-                       _("failed to boot guest VM"));
-        goto cleanup;
-    }
-
-    virCHMonitorRefreshThreadInfo(priv->monitor);
-
-    virCHProcessUpdateInfo(vm);
-
-    if (virCHProcessSetupThreads(vm) < 0)
-        goto cleanup;
-
-    VIR_DEBUG("Setting global CPU cgroup (if required)");
-    if (chSetupGlobalCpuCgroup(vm) < 0)
-        goto cleanup;
-
-    virDomainObjSetState(vm, VIR_DOMAIN_RUNNING, reason);
-
-    if (virDomainObjSave(vm, driver->xmlopt, cfg->stateDir) < 0)
+    if (virCHProcessFinishStartup(driver, vm,
+                                  true, reason,
+                                  VIR_DOMAIN_PAUSED_MIGRATION) < 0)
         goto cleanup;
 
     return 0;
