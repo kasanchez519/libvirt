@@ -4699,121 +4699,6 @@ virDomainDefHasDeviceAddress(virDomainDef *def,
 }
 
 
-static int
-virDomainDefAddConsoleCompat(virDomainDef *def)
-{
-    size_t i;
-
-    /*
-     * Some really crazy backcompat stuff for consoles
-     *
-     * Historically the first (and only) '<console>' element in an HVM guest
-     * was treated as being an alias for a <serial> device.
-     *
-     * So if we see that this console device should be a serial device, then we
-     * move the config over to def->serials[0] (or discard it if that already
-     * exists). However, given console can already be filled with aliased data
-     * of def->serials[0]. Keep it then.
-     *
-     * We then fill def->consoles[0] with a stub just so we get sequencing
-     * correct for consoles > 0
-     */
-
-    /* Only the first console (if there are any) can be of type serial,
-     * verify that no other console is of type serial
-     */
-    for (i = 1; i < def->nconsoles; i++) {
-        virDomainChrDef *cons = def->consoles[i];
-
-        if (cons->targetType == VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_SERIAL) {
-            virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                           _("Only the first console can be a serial port"));
-            return -1;
-        }
-    }
-    if (def->nconsoles > 0 && def->os.type == VIR_DOMAIN_OSTYPE_HVM &&
-        (def->consoles[0]->targetType == VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_SERIAL ||
-         def->consoles[0]->targetType == VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_NONE)) {
-
-        /* If there isn't a corresponding serial port:
-         *  - create one and set, the console to be an alias for it
-         *
-         * If there is a corresponding serial port:
-         * - Check if the source definition is equal:
-         *    - if yes: leave it as-is
-         *    - if no: change the console to be alias of the serial port
-         */
-
-        /* create the serial port definition from the console definition */
-        if (def->nserials == 0) {
-            VIR_APPEND_ELEMENT(def->serials, def->nserials, def->consoles[0]);
-
-            /* modify it to be a serial port */
-            def->serials[0]->deviceType = VIR_DOMAIN_CHR_DEVICE_TYPE_SERIAL;
-            def->serials[0]->targetType = VIR_DOMAIN_CHR_SERIAL_TARGET_TYPE_NONE;
-            def->serials[0]->target.port = 0;
-        } else {
-            /* if the console source doesn't match */
-            if (!virDomainChrSourceDefIsEqual(def->serials[0]->source,
-                                              def->consoles[0]->source)) {
-                g_clear_pointer(&def->consoles[0], virDomainChrDefFree);
-            }
-        }
-
-        if (!def->consoles[0]) {
-            /* allocate a new console type for the stolen one */
-            if (!(def->consoles[0] = virDomainChrDefNew(NULL)))
-                return -1;
-
-            /* Create an console alias for the serial port */
-            def->consoles[0]->deviceType = VIR_DOMAIN_CHR_DEVICE_TYPE_CONSOLE;
-            def->consoles[0]->targetType = VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_SERIAL;
-        }
-    } else if (def->os.type == VIR_DOMAIN_OSTYPE_HVM && def->nserials > 0 &&
-               def->serials[0]->deviceType == VIR_DOMAIN_CHR_DEVICE_TYPE_SERIAL) {
-
-        switch ((virDomainChrSerialTargetType) def->serials[0]->targetType) {
-        case VIR_DOMAIN_CHR_SERIAL_TARGET_TYPE_ISA:
-        case VIR_DOMAIN_CHR_SERIAL_TARGET_TYPE_SPAPR_VIO:
-        case VIR_DOMAIN_CHR_SERIAL_TARGET_TYPE_SYSTEM:
-        case VIR_DOMAIN_CHR_SERIAL_TARGET_TYPE_SCLP:
-        case VIR_DOMAIN_CHR_SERIAL_TARGET_TYPE_NONE: {
-
-            /* Create a stub console to match the serial port.
-             * console[0] either does not exist
-             *                or has a different type than SERIAL or NONE.
-             */
-            virDomainChrDef *chr;
-            if (!(chr = virDomainChrDefNew(NULL)))
-                return -1;
-
-            if (VIR_INSERT_ELEMENT(def->consoles,
-                                   0,
-                                   def->nconsoles,
-                                   chr) < 0) {
-                virDomainChrDefFree(chr);
-                return -1;
-            }
-
-            def->consoles[0]->deviceType = VIR_DOMAIN_CHR_DEVICE_TYPE_CONSOLE;
-            def->consoles[0]->targetType = VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_SERIAL;
-
-            break;
-        }
-
-        case VIR_DOMAIN_CHR_SERIAL_TARGET_TYPE_PCI:
-        case VIR_DOMAIN_CHR_SERIAL_TARGET_TYPE_USB:
-        case VIR_DOMAIN_CHR_SERIAL_TARGET_TYPE_ISA_DEBUG:
-        case VIR_DOMAIN_CHR_SERIAL_TARGET_TYPE_LAST:
-            /* Nothing to do */
-            break;
-        }
-    }
-
-    return 0;
-}
-
-
 
 /**
  * virDomainDriveAddressIsUsedByDisk:
@@ -21614,8 +21499,6 @@ virDomainDefAddImplicitVideo(virDomainDef *def, virDomainXMLOption *xmlopt)
 int
 virDomainDefAddImplicitDevices(virDomainDef *def, virDomainXMLOption *xmlopt)
 {
-    if (virDomainDefAddConsoleCompat(def) < 0)
-        return -1;
 
     if (virDomainDefAddImplicitControllers(def) < 0)
         return -1;
