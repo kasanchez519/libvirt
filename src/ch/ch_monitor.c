@@ -164,7 +164,7 @@ virCHMonitorBuildDiskJson(virJSONValue *disks, virDomainDiskDef *diskdef)
 {
     g_autoptr(virJSONValue) disk = virJSONValueNewObject();
     virStorageType actualType;
-    
+
     if (!diskdef->src)
         return -1;
 
@@ -750,7 +750,7 @@ virCHMonitorThreadInfoFree(virCHMonitor *mon)
     VIR_FREE(mon->threads);
 }
 
-static size_t
+size_t
 virCHMonitorRefreshThreadInfo(virCHMonitor *mon)
 {
     virCHMonitorThreadInfo *info = NULL;

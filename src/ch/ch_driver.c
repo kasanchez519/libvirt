@@ -46,6 +46,26 @@ VIR_LOG_INIT("ch.ch_driver");
 virCHDriver *ch_driver = NULL;
 
 /* Functions */
+static virDomainObj *
+chDomObjFromDomain(virDomainPtr domain)
+{
+    virDomainObj *vm;
+    virCHDriver *driver = domain->conn->privateData;
+    char uuidstr[VIR_UUID_STRING_BUFLEN];
+
+    vm = virDomainObjListFindByUUID(driver->domains, domain->uuid);
+    if (!vm) {
+        virUUIDFormat(domain->uuid, uuidstr);
+        virReportError(VIR_ERR_NO_DOMAIN,
+                       _("no domain with matching uuid '%s' (%s)"),
+                       uuidstr, domain->name);
+        return NULL;
+    }
+
+    return vm;
+}
+
+
 static int
 chConnectURIProbe(char **uri)
 {
@@ -221,7 +241,7 @@ chDomainCreateXML(virConnectPtr conn,
     if (virCHDomainObjBeginJob(vm, VIR_JOB_MODIFY) < 0)
         goto cleanup;
 
-    if (virCHProcessStart(driver, vm, VIR_DOMAIN_RUNNING_BOOTED) < 0)
+    if (virCHProcessStart(driver, vm, VIR_DOMAIN_RUNNING_BOOTED, 0) < 0)
         goto endjob;
 
     dom = virGetDomain(conn, vm->def->name, vm->def->uuid, vm->def->id);
@@ -1687,10 +1707,10 @@ chDomainSetNumaParameters(virDomainPtr dom,
     return ret;
 }
 
-static int
-virCHDomainSetVcpusMax(virCHDriverPtr driver,
-                       virDomainDefPtr def,
-                       virDomainDefPtr persistentDef,
+/*static int
+virCHDomainSetVcpusMax(virCHDriver *driver,
+                       virDomainDef *def,
+                       virDomainDef *persistentDef,
                        unsigned int nvcpus)
 {
     g_autoptr(virCHDriverConfig) cfg = virCHDriverGetConfig(driver);
@@ -1711,14 +1731,14 @@ virCHDomainSetVcpusMax(virCHDriverPtr driver,
 
     if (virDomainDefGetVcpusTopology(persistentDef, &topologycpus) == 0 &&
         nvcpus != topologycpus) {
-        /* allow setting a valid vcpu count for the topology so an invalid
-         * setting may be corrected via this API */
+        // * allow setting a valid vcpu count for the topology so an invalid
+         * setting may be corrected via this API
         virReportError(VIR_ERR_INVALID_ARG, "%s",
                        _("CPU topology doesn't match the desired vcpu count"));
         return -1;
     }
 
-    /* ordering information may become invalid, thus clear it */
+    // * ordering information may become invalid, thus clear it
     virDomainDefVcpuOrderClear(persistentDef);
 
     if (virDomainDefSetVcpusMax(persistentDef, nvcpus, driver->xmlopt) < 0)
@@ -1728,17 +1748,17 @@ virCHDomainSetVcpusMax(virCHDriverPtr driver,
         return -1;
 
     return 0;
-}
+}*/
 
-static int
+/*static int
 chDomainSetVcpusFlags(virDomainPtr dom,
                       unsigned int nvcpus,
                       unsigned int flags)
 {
-    virCHDriverPtr driver = dom->conn->privateData;
-    virDomainObjPtr vm = NULL;
-    virDomainDefPtr def;
-    virDomainDefPtr persistentDef;
+    virCHDriver *driver = dom->conn->privateData;
+    virDomainObj *vm = NULL;
+    virDomainDef *def;
+    virDomainDef *persistentDef;
     int ret = -1;
 
     virCheckFlags(VIR_DOMAIN_AFFECT_LIVE |
@@ -1754,7 +1774,7 @@ chDomainSetVcpusFlags(virDomainPtr dom,
         goto cleanup;
 
 
-    if (virCHDomainObjBeginJob(vm, CH_JOB_MODIFY) < 0)
+    if (virCHDomainObjBeginJob(vm, VIR_JOB_MODIFY) < 0)
         goto cleanup;
 
     if (virDomainObjGetDefs(vm, flags, &def, &persistentDef) < 0)
@@ -1771,19 +1791,21 @@ chDomainSetVcpusFlags(virDomainPtr dom,
  cleanup:
     virDomainObjEndAPI(&vm);
     return ret;
-}
+}*/
 
+/*
 static int
 chDomainSetVcpus(virDomainPtr dom, unsigned int nvcpus)
 {
     return chDomainSetVcpusFlags(dom, nvcpus, VIR_DOMAIN_AFFECT_LIVE);
-}
+}*/
 
+/*
 static int chDomainSetAutostart(virDomainPtr dom,
                                   int autostart)
 {
-    virCHDriverPtr driver = dom->conn->privateData;
-    virDomainObjPtr vm;
+    virCHDriver *driver = dom->conn->privateData;
+    virDomainObj *vm;
     g_autofree char *configFile = NULL;
     g_autofree char *autostartLink = NULL;
     int ret = -1;
@@ -1851,8 +1873,9 @@ static int chDomainSetAutostart(virDomainPtr dom,
  cleanup:
     virDomainObjEndAPI(&vm);
     return ret;
-}
+}*/
 
+/*
 static int chDomainGetAutostart(virDomainPtr dom,
                                   int *autostart)
 {
@@ -1872,7 +1895,7 @@ static int chDomainGetAutostart(virDomainPtr dom,
     virDomainObjEndAPI(&vm);
     return ret;
 };
-
+*/
 static char *
 chDomainMigrateBegin3Params(virDomainPtr domain,
                             virTypedParameterPtr params,
@@ -1881,7 +1904,7 @@ chDomainMigrateBegin3Params(virDomainPtr domain,
                             int *cookieoutlen,
                             unsigned int flags)
 {
-    virDomainObjPtr vm;
+    virDomainObj *vm;
     const char *xmlin = NULL;
     const char *dname = NULL;
     char *xmlout = NULL;
@@ -1920,7 +1943,7 @@ chDomainMigratePrepare3Params(virConnectPtr dconn,
                               char **uri_out,
                               unsigned int flags)
 {
-    virCHDriverPtr driver = dconn->privateData;
+    virCHDriver *driver = dconn->privateData;
     g_autoptr(virDomainDef) def = NULL;
     g_autofree char *origname = NULL;
     const char *dom_xml = NULL;
@@ -1963,8 +1986,8 @@ chDomainMigratePerform3Params(virDomainPtr dom,
                               int *cookieoutlen,
                               unsigned int flags)
 {
-    virCHDriverPtr driver = dom->conn->privateData;
-    virDomainObjPtr vm = NULL;
+    virCHDriver *driver = dom->conn->privateData;
+    virDomainObj *vm = NULL;
     int ret = -1;
     const char *dom_xml = NULL;
     const char *dname = NULL;
@@ -2037,8 +2060,8 @@ chDomainMigrateConfirm3Params(virDomainPtr domain,
                               unsigned int flags,
                               int cancelled)
 {
-    virDomainObjPtr vm = NULL;
-    virCHDriverPtr driver = domain->conn->privateData;
+    virDomainObj *vm = NULL;
+    virCHDriver *driver = domain->conn->privateData;
     int ret = -1;
 
     (void) cookiein;
@@ -2065,8 +2088,8 @@ static int
 chDomainGetJobInfo(virDomainPtr dom,
                    virDomainJobInfoPtr info)
 {
-    virCHDriverPtr driver = dom->conn->privateData;
-    virDomainObjPtr vm;
+    virCHDriver *driver = dom->conn->privateData;
+    virDomainObj *vm;
     int ret = -1;
 
     memset(info, 0, sizeof(*info));

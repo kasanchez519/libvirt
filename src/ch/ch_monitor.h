@@ -121,3 +121,4 @@ size_t virCHMonitorGetThreadInfo(virCHMonitor *mon, bool refresh,
                                  virCHMonitorThreadInfo **threads);
 int virCHMonitorGetIOThreads(virCHMonitor *mon,
                              virDomainIOThreadInfo ***iothreads);
+size_t virCHMonitorRefreshThreadInfo(virCHMonitor *mon);

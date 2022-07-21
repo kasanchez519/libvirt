@@ -27,28 +27,24 @@ typedef enum {
     VIR_CH_PROCESS_START_PAUSED = 1 << 0,
 } chProcessStartFlags;
 
-int virCHProcessStart(virCHDriverPtr  driver,
-                      virDomainObjPtr vm,
+int virCHProcessStart(virCHDriver  *driver,
+                      virDomainObj *vm,
                       virDomainRunningReason reason,
                       unsigned int flags);
-int virCHProcessStop(virCHDriverPtr driver,
-                     virDomainObjPtr vm,
+int virCHProcessStop(virCHDriver *driver,
+                     virDomainObj *vm,
                      virDomainShutoffReason reason);
+
+int virCHProcessSetupThreads(virDomainObj *vm);
 
 int virCHProcessSetupVcpu(virDomainObj *vm,
                           unsigned int vcpuid);
 
-int virCHProcessSetupIOThread(virDomainObjPtr vm,
-                             virDomainIOThreadInfoPtr iothread);
-
-int
-virCHProcessSetupEmulatorThread(virDomainObjPtr vm, pid_t tid);
-
 void
-chProcessReconnectAll(virCHDriverPtr driver);
+chProcessReconnectAll(virCHDriver *driver);
 
-int virCHProcessFinishStartup(virCHDriverPtr driver,
-                              virDomainObjPtr vm,
+int virCHProcessFinishStartup(virCHDriver *driver,
+                              virDomainObj *vm,
                               bool startCPUs,
                               virDomainRunningReason reason,
                               virDomainPausedReason pausedReason);

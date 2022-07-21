@@ -51,21 +51,18 @@ chMigrationCookieFree(chMigrationCookiePtr mig)
 
 
 static chMigrationCookiePtr
-chMigrationCookieNew(virDomainObjPtr dom)
+chMigrationCookieNew(virDomainObj *dom)
 {
-    chMigrationCookiePtr mig = NULL;
+    chMigrationCookie *mig = NULL;
 
-    if (VIR_ALLOC(mig) < 0)
-        goto error;
+    mig = g_new0(chMigrationCookie, 1);
+
 
     /* Nothing to do */
     (void)dom;
 
     return mig;
 
-error:
-    chMigrationCookieFree(mig);
-    return NULL;
 }
 
 static int
@@ -92,10 +89,9 @@ static int
 chMigrationEatCookie(const char *cookiein, int cookieinlen,
                      chMigrationCookiePtr *migout)
 {
-    chMigrationCookiePtr mig = NULL;
+    chMigrationCookie *mig = NULL;
 
-    if (VIR_ALLOC(mig) < 0)
-        return -1;
+    mig = g_new0(chMigrationCookie, 1);
 
     /* Nothing to do */
     (void)cookiein;
@@ -106,7 +102,7 @@ chMigrationEatCookie(const char *cookiein, int cookieinlen,
 }
 
 static bool
-chDomainMigrationIsAllowed(virDomainDefPtr def)
+chDomainMigrationIsAllowed(virDomainDef *def)
 {
     if (def->nhostdevs > 0) {
         virReportError(VIR_ERR_OPERATION_INVALID, "%s",
@@ -119,17 +115,17 @@ chDomainMigrationIsAllowed(virDomainDefPtr def)
 
 char *
 chDomainMigrationSrcBegin(virConnectPtr conn,
-                          virDomainObjPtr vm,
+                          virDomainObj *vm,
                           const char *xmlin,
                           char **cookieout,
                           int *cookieoutlen)
 {
-    virCHDriverPtr driver = conn->privateData;
+    virCHDriver *driver = conn->privateData;
     char *xml = NULL;
     chMigrationCookiePtr mig = NULL;
-    virDomainDefPtr tmpdef = NULL, def;
+    virDomainDef *tmpdef = NULL, *def;
 
-    if (virCHDomainObjBeginJob(vm, CH_JOB_MODIFY) < 0)
+    if (virCHDomainObjBeginJob(vm, VIR_JOB_MODIFY) < 0)
         goto cleanup;
 
     if (!(mig = chMigrationCookieNew(vm)))
@@ -165,13 +161,13 @@ cleanup:
     return xml;
 }
 
-virDomainDefPtr
-chDomainMigrationAnyPrepareDef(virCHDriverPtr driver,
+virDomainDef *
+chDomainMigrationAnyPrepareDef(virCHDriver *driver,
                                const char *dom_xml,
                                const char *dname,
                                char **origname)
 {
-    virDomainDefPtr def;
+    virDomainDef *def;
     char *name = NULL;
 
     if (!dom_xml) {
@@ -201,7 +197,7 @@ chDomainMigrationAnyPrepareDef(virCHDriverPtr driver,
 
 int
 chDomainMigrationDstPrepare(virConnectPtr dconn,
-                            virDomainDefPtr *def,
+                            virDomainDef **def,
                             const char *cookiein,
                             int cookieinlen,
                             char **cookieout,
@@ -210,21 +206,21 @@ chDomainMigrationDstPrepare(virConnectPtr dconn,
                             char **uri_out,
                             const char *origname)
 {
-    virCHDriverPtr driver = dconn->privateData;
+    virCHDriver *driver = dconn->privateData;
     chMigrationCookiePtr mig = NULL;
-    virDomainObjPtr vm = NULL;
+    virDomainObj *vm = NULL;
 
     if (chMigrationEatCookie(cookiein, cookieinlen, &mig) < 0)
         goto cleanup;
 
-    if (!(vm = virDomainObjListAdd(driver->domains, *def,
+    if (!(vm = virDomainObjListAdd(driver->domains, def,
                     driver->xmlopt,
                     VIR_DOMAIN_OBJ_LIST_ADD_LIVE |
                     VIR_DOMAIN_OBJ_LIST_ADD_CHECK_LIVE,
                     NULL)))
         goto cleanup;
 
-    if (virCHDomainObjBeginJob(vm, CH_JOB_MODIFY) < 0)
+    if (virCHDomainObjBeginJob(vm, VIR_JOB_MODIFY) < 0)
         goto cleanup;
 
     (void) def;
@@ -254,8 +250,8 @@ cleanup:
 
 
 int
-chDomainMigrationSrcPerform(virCHDriverPtr driver,
-                            virDomainObjPtr vm,
+chDomainMigrationSrcPerform(virCHDriver *driver,
+                            virDomainObj *vm,
                             const char *dom_xml,
                             const char *dconnuri,
                             const char *uri_str,
@@ -274,8 +270,8 @@ chDomainMigrationSrcPerform(virCHDriverPtr driver,
 }
 
 int
-chDomainMigrationSrcConfirm(virCHDriverPtr driver,
-                            virDomainObjPtr vm,
+chDomainMigrationSrcConfirm(virCHDriver *driver,
+                            virDomainObj *vm,
                             unsigned int flags,
                             int cancelled)
 {
