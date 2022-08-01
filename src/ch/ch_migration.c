@@ -28,6 +28,7 @@
 #include "viralloc.h"
 #include "ch_migration.h"
 #include "ch_process.h"
+#include "virutil.h"
 
 #define VIR_FROM_THIS VIR_FROM_CH
 
@@ -209,6 +210,10 @@ chDomainMigrationDstPrepare(virConnectPtr dconn,
     virCHDriver *driver = dconn->privateData;
     chMigrationCookiePtr mig = NULL;
     virDomainObj *vm = NULL;
+    virCommand *cmd;
+    unsigned short port = 0;
+    const char *incFormat;
+    g_autofree char *hostname = NULL;
 
     if (chMigrationEatCookie(cookiein, cookieinlen, &mig) < 0)
         goto cleanup;
@@ -230,12 +235,47 @@ chDomainMigrationDstPrepare(virConnectPtr dconn,
     (void) cookieoutlen;
     (void) origname;
 
+    // Start stub Cloud-Hypervisor process on Dest
     if (virCHProcessStart(driver, vm, 0, VIR_CH_PROCESS_START_PAUSED) < 0)
         goto cleanup;
+    // Start ch-remote process (/var/run/libvirt/ch/ch_impish-receive)
+    cmd = virCommandNew("ch-remote");
+
+    virCommandAddArgPair(cmd, "--api-socket","/var/run/libvirt/ch/ch_impish_nfs-socket");
+    virCommandAddArg(cmd, "receive-migration");
+    //TODO:  This path should derived
+    virCommandAddArg(cmd, "unix:/var/run/libvirt/ch/ch_impish_nfs-migr-send");
+
+    VIR_DEBUG("PPK: ch-remote cmd : %s", virCommandToString(cmd, false) );
+
+    if (virCommandRunAsync(cmd, NULL) < 0)
+        return -1;
+    // //socat command, get port using virPortAllocatorAcquire
+    if (virPortAllocatorAcquire(driver->migrationPorts, &port) < 0)
+         goto cleanup;
+
+    if ((hostname = virGetHostname()) == NULL)
+        goto cleanup;
+
+    incFormat = "%s:%s:%d";
+    *uri_out = g_strdup_printf(incFormat, "tcp", hostname, port);
+    VIR_DEBUG("Generated uri_out=%s", *uri_out);
+    
+    cmd = virCommandNew("socat");
+    //virCommandAddArg(cmd, "TCP-LISTEN:%s,reuseaddr", port);
+    virCommandAddArg(cmd,  g_strdup_printf("TCP-LISTEN:%d,reuseaddr", port));
+    virCommandAddArg(cmd, "UNIX-CLIENT:/var/run/libvirt/ch/ch_impish_nfs-migr-send");
+    if (virCommandRunAsync(cmd, NULL) < 0)
+        return -1;
+    VIR_DEBUG("PPK: socat cmd : %s", virCommandToString(cmd, false) );
+   
 
     virCHDomainObjEndJob(vm);
 
     chMigrationCookieFree(mig);
+    
+
+
 
     return 0;
 

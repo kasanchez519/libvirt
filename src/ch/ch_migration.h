@@ -21,6 +21,7 @@
 #pragma once
 
 #include "ch_conf.h"
+#include "vircommand.h"
 
 #define CH_MIGRATION_FLAGS \
     (VIR_MIGRATE_LIVE | \

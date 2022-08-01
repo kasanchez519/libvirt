@@ -21,6 +21,7 @@
 #pragma once
 
 #include "virdomainobjlist.h"
+#include "virportallocator.h"
 #include "virthread.h"
 
 #define CH_DRIVER_NAME "CH"

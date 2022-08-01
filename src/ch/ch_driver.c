@@ -920,8 +920,8 @@ static int chStateInitialize(bool privileged,
     }
      if ((ch_driver->migrationPorts =
           virPortAllocatorRangeNew(_("migration"),
-                                   cfg->migrationPortMin,
-                                   cfg->migrationPortMax)) == NULL)
+                                   ch_driver->config->migrationPortMin,
+                                   ch_driver->config->migrationPortMax)) == NULL)
          goto cleanup;
 
     ch_driver->privileged = privileged;
@@ -1934,8 +1934,11 @@ chDomainMigrateBegin3Params(virDomainPtr domain,
 
     xmlout = chDomainMigrationSrcBegin(domain->conn, vm, xmlin,
                                        cookieout, cookieoutlen);
+    VIR_DEBUG("t-kasanchez xmlout generated");
+    //return xmlout;
 cleanup:
     virDomainObjEndAPI(&vm);
+    VIR_DEBUG("t-kasanchez api ended");
     return xmlout;
 }
 
@@ -1957,6 +1960,7 @@ chDomainMigratePrepare3Params(virConnectPtr dconn,
     const char *dname = NULL;
     const char *uri_in = NULL;
 
+    VIR_DEBUG("t-kasanchez prepare reached");
     virCheckFlags(CH_MIGRATION_FLAGS, -1);
 
     if (virTypedParamsValidate(params, nparams, CH_MIGRATION_PARAMETERS) < 0)
