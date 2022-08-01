@@ -298,6 +298,7 @@ chDomainMigrationSrcPerform(virCHDriver *driver,
                             const char *dname,
                             unsigned int flags)
 {
+    virCommand *cmd;
     (void) driver;
     (void) vm;
     (void) dom_xml;
@@ -306,7 +307,23 @@ chDomainMigrationSrcPerform(virCHDriver *driver,
     (void) dname;
     (void) flags;
 
-    return -1;
+    VIR_DEBUG("t-kasanchez %s", uri_str);
+    cmd = virCommandNew("socat");
+    virCommandAddArg(cmd, "UNIX-LISTEN:/var/run/libvirt/ch/ch_impish_nfs-migr-send, reuseaddr");
+    virCommandAddArg(cmd, uri_str);
+    if (virCommandRunAsync(cmd, NULL) < 0)
+        return -1;
+    
+    cmd = virCommandNew("ch-remote");
+    virCommandAddArgPair(cmd, "--api-socket", "/var/run/libvirt/ch/ch_impish_nfs-socket");
+    virCommandAddArg(cmd, "send-migration");
+    virCommandAddArg(cmd, "unix:/var/run/libvirt/ch/ch_impish_nfs-migr-send");
+    if (virCommandRunAsync(cmd, NULL) < 0)
+        return -1;
+
+    return 0;
+
+    
 }
 
 int
