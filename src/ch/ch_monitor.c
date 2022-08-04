@@ -164,7 +164,7 @@ virCHMonitorBuildDiskJson(virJSONValue *disks, virDomainDiskDef *diskdef)
 {
     g_autoptr(virJSONValue) disk = virJSONValueNewObject();
     virStorageType actualType;
-    
+
     if (!diskdef->src)
         return -1;
 
@@ -562,6 +562,11 @@ virCHMonitorNew(virDomainObj *vm, const char *socketdir)
 
     virCommandAddArg(cmd, "--api-socket");
     virCommandAddArgFormat(cmd, "fd=%d", socket_fd);
+    virCommandAddArgFormat(cmd, "--seccomp");
+    virCommandAddArgFormat(cmd, "false");
+    virCommandAddArg(cmd, "-vvv");
+    virCommandAddArg(cmd, "--log-file");
+    virCommandAddArg(cmd, "/var/log/libvirt/ch.log");
     virCommandPassFD(cmd, socket_fd, VIR_COMMAND_PASS_FD_CLOSE_PARENT);
 
     /* launch Cloud-Hypervisor socket */
@@ -653,7 +658,7 @@ virCHMonitorPutNoContent(virCHMonitor *mon, const char *endpoint)
     VIR_LOCK_GUARD lock = virObjectLockGuard(mon);
     g_autofree char *url = NULL;
     int responseCode = 0;
-    int ret = -1;
+    int ret = 0;
 
     url = g_strdup_printf("%s/%s", URL_ROOT, endpoint);
 
@@ -750,7 +755,7 @@ virCHMonitorThreadInfoFree(virCHMonitor *mon)
     VIR_FREE(mon->threads);
 }
 
-static size_t
+size_t
 virCHMonitorRefreshThreadInfo(virCHMonitor *mon)
 {
     virCHMonitorThreadInfo *info = NULL;

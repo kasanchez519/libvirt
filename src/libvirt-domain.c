@@ -4194,6 +4194,7 @@ virDomainMigrate3(virDomainPtr domain,
                   unsigned int nparams,
                   unsigned int flags)
 {
+
     virDomainPtr ddomain = NULL;
     const char *compatParams[] = { VIR_MIGRATE_PARAM_URI,
                                    VIR_MIGRATE_PARAM_DEST_NAME,
@@ -4207,6 +4208,7 @@ virDomainMigrate3(virDomainPtr domain,
     int rc_dst;
     int rc;
 
+    VIR_DEBUG("t-kasanchez DEBUG STATEMENT - virDomainMigrate3 called");
     VIR_DOMAIN_DEBUG(domain, "dconn=%p, params=%p, nparms=%u flags=0x%x",
                      dconn, params, nparams, flags);
     VIR_TYPED_PARAMS_DEBUG(params, nparams);
@@ -13426,7 +13428,7 @@ int virDomainGetLaunchSecurityInfo(virDomainPtr domain,
  * @flags: currently used, set to 0.
  *
  * Set a launch security secret in the guest's memory. The guest must be
- * in a paused state, e.g. in state VIR_DOMIAN_PAUSED as reported by
+ * in a paused state, e.g. in state VIR_AN_PAUSED as reported by
  * virDomainGetState. On success, the guest can be transitioned to a
  * running state. On failure, the guest should be destroyed.
  *

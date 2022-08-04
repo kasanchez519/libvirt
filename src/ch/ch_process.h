@@ -23,12 +23,28 @@
 #include "ch_conf.h"
 #include "internal.h"
 
-int virCHProcessStart(virCHDriver *driver,
+typedef enum {
+    VIR_CH_PROCESS_START_PAUSED = 1 << 0,
+} chProcessStartFlags;
+
+int virCHProcessStart(virCHDriver  *driver,
                       virDomainObj *vm,
-                      virDomainRunningReason reason);
+                      virDomainRunningReason reason,
+                      unsigned int flags);
 int virCHProcessStop(virCHDriver *driver,
                      virDomainObj *vm,
                      virDomainShutoffReason reason);
 
+int virCHProcessSetupThreads(virDomainObj *vm);
+
 int virCHProcessSetupVcpu(virDomainObj *vm,
                           unsigned int vcpuid);
+
+void
+chProcessReconnectAll(virCHDriver *driver);
+
+int virCHProcessFinishStartup(virCHDriver *driver,
+                              virDomainObj *vm,
+                              bool startCPUs,
+                              virDomainRunningReason reason,
+                              virDomainPausedReason pausedReason);

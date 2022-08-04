@@ -36,6 +36,24 @@ struct virCHDomainJobObj {
     int owner;                          /* Thread which set current job */
 };
 
+/* Only 1 job is allowed at any time
+ * A job includes *all* ch.so api, even those just querying
+ * information, not merely actions */
+
+enum virCHDomainJob {
+    CH_JOB_NONE = 0,      /* Always set to 0 for easy if (jobActive) conditions */
+    CH_JOB_QUERY,         /* Doesn't change any state */
+    CH_JOB_DESTROY,       /* Destroys the domain (cannot be masked out) */
+    CH_JOB_MODIFY,        /* May change state */
+    CH_JOB_LAST
+};
+VIR_ENUM_DECL(virCHDomainJob);
+
+typedef enum {
+    CH_DOMAIN_LOG_CONTEXT_MODE_START,
+    CH_DOMAIN_LOG_CONTEXT_MODE_ATTACH,
+    CH_DOMAIN_LOG_CONTEXT_MODE_STOP,
+} chDomainLogContextMode;
 
 typedef struct _virCHDomainObjPrivate virCHDomainObjPrivate;
 struct _virCHDomainObjPrivate {
