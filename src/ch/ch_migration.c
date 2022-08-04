@@ -29,6 +29,7 @@
 #include "ch_migration.h"
 #include "ch_process.h"
 #include "virutil.h"
+#include "unistd.h"
 
 #define VIR_FROM_THIS VIR_FROM_CH
 
@@ -211,9 +212,14 @@ chDomainMigrationDstPrepare(virConnectPtr dconn,
     chMigrationCookiePtr mig = NULL;
     virDomainObj *vm = NULL;
     virCommand *cmd;
+    virCommand *clh;
+    virCommand *chRemote;
+    virCommand *socat;
     unsigned short port = 0;
     const char *incFormat;
     g_autofree char *hostname = NULL;
+    bool sendDebugMessage = true;
+    //FILE *file;
 
     if (chMigrationEatCookie(cookiein, cookieinlen, &mig) < 0)
         goto cleanup;
@@ -235,45 +241,78 @@ chDomainMigrationDstPrepare(virConnectPtr dconn,
     (void) cookieoutlen;
     (void) origname;
 
-    // Start stub Cloud-Hypervisor process on Dest
-    if (virCHProcessStart(driver, vm, 0, VIR_CH_PROCESS_START_PAUSED) < 0)
-        goto cleanup;
-    // Start ch-remote process (/var/run/libvirt/ch/ch_impish-receive)
-    cmd = virCommandNew("ch-remote");
 
-    virCommandAddArgPair(cmd, "--api-socket","/var/run/libvirt/ch/ch_impish_nfs-socket");
-    virCommandAddArg(cmd, "receive-migration");
-    //TODO:  This path should derived
-    virCommandAddArg(cmd, "unix:/var/run/libvirt/ch/ch_impish_nfs-migr-send");
-
-    VIR_DEBUG("PPK: ch-remote cmd : %s", virCommandToString(cmd, false) );
-
-    if (virCommandRunAsync(cmd, NULL) < 0)
-        return -1;
-    // //socat command, get port using virPortAllocatorAcquire
+    //get uri_out
     if (virPortAllocatorAcquire(driver->migrationPorts, &port) < 0)
          goto cleanup;
-
     if ((hostname = virGetHostname()) == NULL)
         goto cleanup;
-
     incFormat = "%s:%s:%d";
     *uri_out = g_strdup_printf(incFormat, "tcp", hostname, port);
     VIR_DEBUG("Generated uri_out=%s", *uri_out);
-    
+
+    // if (virCHProcessStart(driver, vm, 0, VIR_CH_PROCESS_START_PAUSED) < 0)
+    //     goto cleanup;
+
+
+    //clh command
+    cmd = virCommandNew("cloud-hypervisor");
+    virCommandAddArgPair(cmd, "--api-socket", "/var/run/libvirt/ch/ch_impish_nfs-socket");
+    virCommandAddArg(cmd, "-vvv");
+    virCommandAddArgPair(cmd, "--log-file", "/var/log/libvirt/ch.log");
+    VIR_DEBUG("PPK: clh cmd : %s", virCommandToString(cmd, false) );
+    clh = cmd;
+
+    //ch-remote command
+    cmd = virCommandNew("ch-remote");
+    virCommandAddArgPair(cmd, "--api-socket","/var/run/libvirt/ch/ch_impish_nfs-socket");
+    virCommandAddArg(cmd, "receive-migration");
+    virCommandAddArg(cmd, "unix:/var/run/libvirt/ch/ch_impish_nfs-migr-recv");
+    VIR_DEBUG("PPK: ch-remote cmd : %s", virCommandToString(cmd, false) );
+    chRemote = cmd;
+
+    //socat command
     cmd = virCommandNew("socat");
-    //virCommandAddArg(cmd, "TCP-LISTEN:%s,reuseaddr", port);
-    virCommandAddArg(cmd,  g_strdup_printf("TCP-LISTEN:%d,reuseaddr", port));
-    virCommandAddArg(cmd, "UNIX-CLIENT:/var/run/libvirt/ch/ch_impish_nfs-migr-send");
-    if (virCommandRunAsync(cmd, NULL) < 0)
-        return -1;
+    virCommandAddArg(cmd, "-d");
+    virCommandAddArg(cmd, "-d");
+    virCommandAddArg(cmd, "-d");
+    virCommandAddArg(cmd, "-d");
+    virCommandAddArg(cmd, "-lf");
+    virCommandAddArg(cmd, "/var/log/libvirt/socat_dest.log");
+    virCommandAddArg(cmd, "-x");
+    virCommandAddArg(cmd, "-v");
+    virCommandAddArg(cmd, "2>");
+    virCommandAddArg(cmd, "/var/log/libvirt/socat_err.log");
+    virCommandAddArg(cmd, g_strdup_printf("TCP-LISTEN:%d,reuseaddr", port));
+    virCommandAddArg(cmd, "UNIX-CLIENT:/var/run/libvirt/ch/ch_impish_nfs-migr-recv");
     VIR_DEBUG("PPK: socat cmd : %s", virCommandToString(cmd, false) );
-   
+    socat = cmd;
+
+    //run commands
+    if (virCommandRunAsync(clh, NULL) < 0)
+        return -1;
+    sleep(5);
+    if (virCommandRunAsync(chRemote, NULL) < 0)
+        return -1;
+    //sleep(5);
+
+    while(access("/var/run/libvirt/ch/ch_impish_nfs-migr-recv", F_OK) != 0){
+        if(sendDebugMessage){
+            VIR_DEBUG("t-kasanchez waiting on socket");
+            sendDebugMessage = false;
+        }
+    }
+    VIR_DEBUG("t-kasanchez socket found");
+
+    if (virCommandRunAsync(socat, NULL) < 0)
+        return -1;
+
+
 
     virCHDomainObjEndJob(vm);
 
     chMigrationCookieFree(mig);
-    
+
 
 
 
@@ -292,6 +331,7 @@ cleanup:
 int
 chDomainMigrationSrcPerform(virCHDriver *driver,
                             virDomainObj *vm,
+                            virDomainDef **def,
                             const char *dom_xml,
                             const char *dconnuri,
                             const char *uri_str,
@@ -299,6 +339,8 @@ chDomainMigrationSrcPerform(virCHDriver *driver,
                             unsigned int flags)
 {
     virCommand *cmd;
+    bool sendDebugMessage = true;
+    (void) def;
     (void) driver;
     (void) vm;
     (void) dom_xml;
@@ -307,24 +349,76 @@ chDomainMigrationSrcPerform(virCHDriver *driver,
     (void) dname;
     (void) flags;
 
+    // if (!(vm = virDomainObjListAdd(driver->domains, def,
+    //                                 driver->xmlopt,
+    //                                 VIR_DOMAIN_OBJ_LIST_ADD_LIVE |
+    //                                 VIR_DOMAIN_OBJ_LIST_ADD_CHECK_LIVE,
+    //                                 NULL)))
+    //     return -1;
+
+    // if (virCHDomainObjBeginJob(vm, VIR_JOB_MODIFY) < 0)
+    //     return -1;
+
     VIR_DEBUG("t-kasanchez %s", uri_str);
     cmd = virCommandNew("socat");
-    virCommandAddArg(cmd, "UNIX-LISTEN:/var/run/libvirt/ch/ch_impish_nfs-migr-send, reuseaddr");
+    virCommandAddArg(cmd, "-d");
+    virCommandAddArg(cmd, "-d");
+    virCommandAddArg(cmd, "-d");
+    virCommandAddArg(cmd, "-d");
+    virCommandAddArg(cmd, "-b1024");
+    virCommandAddArg(cmd, "-lf");
+    virCommandAddArg(cmd, "/var/log/libvirt/socat_src.log");
+    virCommandAddArg(cmd, "-x");
+    virCommandAddArg(cmd, "-v");
+    virCommandAddArg(cmd, "2>");
+    virCommandAddArg(cmd, "/var/log/libvirt/socat_err.log");
+    virCommandAddArg(cmd, "UNIX-LISTEN:/var/run/libvirt/ch/ch_impish_nfs-migr-send,reuseaddr");
     virCommandAddArg(cmd, uri_str);
     if (virCommandRunAsync(cmd, NULL) < 0)
         return -1;
-    
+
+    while(access("/var/run/libvirt/ch/ch_impish_nfs-migr-send", F_OK) != 0){
+        if(sendDebugMessage){
+            VIR_DEBUG("t-kasanchez waiting on socket");
+            sendDebugMessage = false;
+        }
+    }
+    VIR_DEBUG("t-kasanchez socket found");
+
+    //sleep(5);
     cmd = virCommandNew("ch-remote");
     virCommandAddArgPair(cmd, "--api-socket", "/var/run/libvirt/ch/ch_impish_nfs-socket");
     virCommandAddArg(cmd, "send-migration");
     virCommandAddArg(cmd, "unix:/var/run/libvirt/ch/ch_impish_nfs-migr-send");
-    if (virCommandRunAsync(cmd, NULL) < 0)
+    if (virCommandRun(cmd, NULL) < 0)
         return -1;
+
+    // virCHDomainObjEndJob(vm);
 
     return 0;
 
-    
+
 }
+
+
+// virDomainPtr
+// chDomainMigrationDstFinish(virCHDriver *driver,
+//                            virConnectPtr dconn,
+//                            virDomainObj *vm,
+//                            unsigned int flags,
+//                            int cancelled)
+// {
+//     virDomainPtr dom = NULL;
+//     (void) driver;
+//     (void) dconn;
+//     (void) vm;
+//     (void) flags;
+//     (void) cancelled;
+//     return dom;
+//     dom = virGetDomain(dconn, vm->def->name, vm->def->uuid, vm->def->id);
+
+// }
+
 
 int
 chDomainMigrationSrcConfirm(virCHDriver *driver,

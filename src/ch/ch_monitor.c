@@ -562,6 +562,11 @@ virCHMonitorNew(virDomainObj *vm, const char *socketdir)
 
     virCommandAddArg(cmd, "--api-socket");
     virCommandAddArgFormat(cmd, "fd=%d", socket_fd);
+    virCommandAddArgFormat(cmd, "--seccomp");
+    virCommandAddArgFormat(cmd, "false");
+    virCommandAddArg(cmd, "-vvv");
+    virCommandAddArg(cmd, "--log-file");
+    virCommandAddArg(cmd, "/var/log/libvirt/ch.log");
     virCommandPassFD(cmd, socket_fd, VIR_COMMAND_PASS_FD_CLOSE_PARENT);
 
     /* launch Cloud-Hypervisor socket */
