@@ -66,6 +66,10 @@ struct _virCHDomainObjPrivate {
     virBitmap *autoCpuset;
     virBitmap *autoNodeset;
     virCgroup *cgroup;
+
+    // store migration commands to wait upon later
+    virCommand *chRemote;
+    virCommand *socat;
 };
 
 #define CH_DOMAIN_PRIVATE(vm) \
