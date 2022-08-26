@@ -653,7 +653,7 @@ virCHMonitorPutNoContent(virCHMonitor *mon, const char *endpoint)
     VIR_LOCK_GUARD lock = virObjectLockGuard(mon);
     g_autofree char *url = NULL;
     int responseCode = 0;
-    int ret = -1;
+    int ret = 0;
 
     url = g_strdup_printf("%s/%s", URL_ROOT, endpoint);
 
