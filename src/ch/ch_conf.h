@@ -42,6 +42,9 @@ struct _virCHDriverConfig {
 
     uid_t user;
     gid_t group;
+
+    unsigned int migrationPortMin;
+    unsigned int migrationPortMax;
 };
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(virCHDriverConfig, virObjectUnref);

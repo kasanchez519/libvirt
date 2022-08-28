@@ -918,6 +918,11 @@ static int chStateInitialize(bool privileged,
             ret = VIR_DRV_STATE_INIT_SKIPPED;
         goto cleanup;
     }
+    if ((ch_driver->migrationPorts =
+          virPortAllocatorRangeNew(_("migration"),
+                                   ch_driver->config->migrationPortMin,
+                                   ch_driver->config->migrationPortMax)) == NULL)
+         goto cleanup;
 
     ch_driver->privileged = privileged;
     ret = VIR_DRV_STATE_INIT_COMPLETE;
