@@ -2117,7 +2117,9 @@ chDomainMigrateConfirm3Params(virDomainPtr domain,
     ret = chDomainMigrationSrcConfirm(driver, vm, flags, cancelled);
 
  cleanup:
+    virDomainObjListRemove(driver->domains, vm);
     virDomainObjEndAPI(&vm);
+    
     return ret;
 }
 
