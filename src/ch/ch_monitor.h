@@ -43,6 +43,7 @@ typedef enum {
     virCHThreadTypeEmulator,
     virCHThreadTypeVcpu,
     virCHThreadTypeIO,
+    virCHThreadTypeIO_work,
     virCHThreadTypeMax
 } virCHThreadType;
 

@@ -792,16 +792,26 @@ virCHMonitorRefreshThreadInfo(virCHMonitor *mon)
             info[i].vcpuInfo.cpuid = cpuid;
             VIR_DEBUG("vcpu%d -> tid: %d", cpuid, tids[i]);
         } else if (STRPREFIX(data, "_disk") || STRPREFIX(data, "_net") ||
-                   STRPREFIX(data, "_rng")) {
+                   STRPREFIX(data, "__console") ||
+                   STRPREFIX(data, "__rng")) {
             /* Prefixes used by cloud-hypervisor for IO Threads are captured at
              * https://github.com/cloud-hypervisor/cloud-hypervisor/blob/main/vmm/src/device_manager.rs */
             info[i].type = virCHThreadTypeIO;
             info[i].ioInfo.tid = tids[i];
             virStrcpy(info[i].ioInfo.thrName, data, VIRCH_THREAD_NAME_LEN - 1);
+            VIR_DEBUG("IO Thread, name = %s -> tid: %d",info[i].ioInfo.thrName, tids[i]);
+        } else if (STRPREFIX(data, "iou-wrk")) {
+            /* Prefixes used by cloud-hypervisor for IO Threads are captured at
+             * https://github.com/cloud-hypervisor/cloud-hypervisor/blob/main/vmm/src/device_manager.rs */
+            info[i].type = virCHThreadTypeIO_work;
+            info[i].ioInfo.tid = tids[i];
+            virStrcpy(info[i].ioInfo.thrName, data, VIRCH_THREAD_NAME_LEN - 1);
+            VIR_DEBUG("IO  WOrk Thread, name = %s -> tid: %d",info[i].ioInfo.thrName, tids[i]);
         } else {
             info[i].type = virCHThreadTypeEmulator;
             info[i].emuInfo.tid = tids[i];
             virStrcpy(info[i].emuInfo.thrName, data, VIRCH_THREAD_NAME_LEN - 1);
+            VIR_DEBUG("Emulator Thread, name = %s -> tid: %d",info[i].emuInfo.thrName, tids[i]);
         }
         mon->nthreads++;
 
