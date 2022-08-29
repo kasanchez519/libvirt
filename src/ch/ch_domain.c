@@ -68,7 +68,7 @@ virCHDomainObjFreeJob(virCHDomainObjPrivate *priv)
  * Successful calls must be followed by EndJob eventually.
  */
 int
-virCHDomainObjBeginJob(virDomainObj *obj, virDomainJob job)
+virCHDomainObjBeginJob(virDomainObj *obj,  virDomainJob job)
 {
     virCHDomainObjPrivate *priv = obj->privateData;
     unsigned long long now;
